@@ -1,0 +1,568 @@
+---
+title: "Eksploraturna podatkovnog skupa Spotify"
+author: "Luka Žmak"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(RColorBrewer)
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(results = 'hold')
+```
+
+## Uvod
+
+Cilj ovog projekta je provesti analizu ulaznog skupa
+[Spotify](https://www.rcharlie.com/spotifyr/) pjesama kroz
+prizmu različitih parametara, kao što su žanrovi, tempo, energija, popularnost
+izvođača i te brojni drugi. Planiram istražiti obrasce u glazbenim
+preferencama korisnika, prepoznati trendove koji oblikuju glazbenu 
+industriju te razumjeti ključne karakteristike pjesama koje čine neku skladbu
+popularnom ili privlačnom publici.
+
+Prvo i osnovno, učitat ćemo naše ulazne podatke:
+```{r, message=FALSE, echo=FALSE}
+Spotify <- read_csv("..\\data\\spotify_songs.csv")
+glimpse(Spotify)
+```
+
+Pretvorba stupaca u odgovarajuće tipove podataka:
+
+```{r, message=FALSE}
+
+Spotify$track_album_release_date <- as.Date(Spotify$track_album_release_date,
+                                            format = '%Y-%m-%d')
+Spotify$mode <- factor(Spotify$mode, levels = c(0, 1))
+Spotify$key <- factor(Spotify$key, levels = -1:11)
+Spotify$playlist_genre <- factor(Spotify$playlist_genre,
+                        levels = c("pop", "rap", "rock", "latin","r&b", "edm"))
+Spotify$playlist_subgenre <- factor(Spotify$playlist_subgenre,
+                                    levels = unique(Spotify$playlist_subgenre))
+Spotify$mode <- sapply(Spotify$mode, function(num){
+  if(num==0) return("mol")
+  if(num==1) return("dur")
+})
+
+Spotify$mode <- as.factor(Spotify$mode)
+Spotify$decade <- as.factor(10 * (year(Spotify$track_album_release_date) %/% 10))
+```
+
+Dodavanje stupca koji prikazuje koliko pojedina pjesma traje u formatu "minute:sekunde":
+
+```{r}
+Spotify$duration_min <-  sprintf("%02d.%02d", floor(Spotify$duration_ms / 60000),
+round(((Spotify$duration_ms / 60000) - floor(Spotify$duration_ms / 60000)) * 60))
+```
+
+## Pregled žanrova, izvođača i albuma
+
+Pogledajmo koji sve žanrovi glazbe su u ovom skupu podataka.
+```{r, echo=FALSE}
+genres <- unique(Spotify$playlist_genre) %>% as.character()
+genres
+```
+Naš podatkovni skup osim žanra za pojedinu pjesmu ima definiran i podžanr.
+Ovdje je popis svih kombinacija žanrova poredan po broju pjesama:
+
+```{r, echo=FALSE}
+genre_combinations <- Spotify %>%
+  filter(!is.na(playlist_genre), !is.na(playlist_subgenre)) %>%
+  group_by(playlist_genre, playlist_subgenre) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  arrange(desc(count))
+
+print(genre_combinations)
+```
+
+Grafički ćemo prikazati koje su najzastupljenije kombinacije pojedinog žanra s njegovim podžanrom:
+
+```{r,message=FALSE, echo=FALSE}
+genre_combinations <- Spotify %>%
+  filter(!is.na(playlist_genre), !is.na(playlist_subgenre)) %>%
+  group_by(playlist_genre, playlist_subgenre) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  slice_head(n = 1)
+
+ggplot(genre_combinations, aes(x = reorder(playlist_subgenre, count),
+                               y = count, fill = playlist_genre)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Najpopularnije kombinacija žanra i podžanra",
+       x = "Podžanr",
+       y = "Broj pjesama",
+       fill = "Žanr") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+## Trendovi kroz različita razdoblja 
+
+Korisnici često pretražuju pjesme prema razdoblju nastanka, stoga im ovaj graf
+može biti vrlo zanimljiv:
+
+```{r, echo=FALSE}
+Spotify <- Spotify %>%
+  mutate(decade = 10 * (floor(year(as.Date(track_album_release_date)) / 10)))
+Spotify <- Spotify %>%
+  filter(!is.na(decade))
+ggplot(Spotify, aes(x = factor(decade))) +
+  geom_bar(fill = "#8da0cb") +
+  labs(title = "Broj pjesama po desetljećima neovisno o žanrovima",
+       x = "Desetljeće",
+       y = "Broj pjesama") +
+  theme_minimal()+
+  scale_fill_brewer(palette = "Dark2")
+```
+Htio smo provjeriti u kojem su se desetljeću smjestilo najviše pjesama, međutim
+gornji graf nam ukazuje da je prevelik uzorak pjesama nastao u 2010-im godinama.
+Stoga sam se odlučili fokusirati na popularnost pojedinog žanra po desetljećima. Ukoliko želimo vidjeti i raspodjelu pjesama po žanru kroz povijest, dobivamo ove
+rezultate:
+
+```{r, echo=FALSE}
+Spotify <- Spotify %>%
+  mutate(decade = 10 * (floor(year(as.Date(track_album_release_date)) / 10)))
+Spotify <- Spotify %>%
+  filter(!is.na(decade))
+ggplot(Spotify, aes(x = factor(decade), fill = factor(decade))) +
+  geom_bar() +
+  labs(title = "Broj pjesama po desetljećima u ovisnosti o žanrovima",
+       x = "Desetljeće",
+       y = "Broj albuma") +
+  theme_minimal() +
+  labs(fill="Desetljeća") +
+  facet_wrap(~playlist_genre, scales = "free_y", ncol = 2)+
+  scale_fill_brewer(palette = "Dark2")+
+  theme(axis.text.x = element_text(angle =45))
+```
+Nastavno na prošli graf, rezultati žanrova pop-a, edm-a te rock-a me ne
+iznenađuje. Slavno doba roka bilo je 80-ih godina, rap se počeo razvijati 90-ih
+godina, dok je sada vrhunac žanrova edm i pop-a. Međutim, rezultati za r&b te latino muziku je učinio da se zapitam je li
+uzorak reprezentativan jer smo očekivao da je njihov vrhunac u nekim davnijim
+vremenima (r&b 50-ih godina, a latino muzika je bila sveprisutna kroz prošla
+razdoblja).
+
+Stoga odlučujem provjeriti koji su najpopularniji izvođači pojedinog desetljeća
+s minimalno tri pjesme kako bi uzorak bio reprezentativan:
+
+ - Najpopularniji pjevači 1950-ih godina:
+```{r, echo=FALSE}
+most_popular_artists_1950s <- Spotify %>%
+  filter(., decade == 1950)%>%
+  group_by(track_artist) %>%
+  summarise(total_popularity = sum(track_popularity),
+            total_songs = n()) %>%
+  mutate(average_popularity = total_popularity / total_songs) %>%
+  arrange(desc(average_popularity)) %>%
+  distinct(track_artist, .keep_all = TRUE) %>% 
+  head(5)
+
+print(most_popular_artists_1950s)
+```
+Budući da u razdoblju 50-ih imamo samo dvije pjesme, nije moguće donijeti neke 
+kvalitetne zaključke.
+
+ - Najpopularniji pjevači 1960-ih godina:
+```{r, echo=FALSE}
+most_popular_artists_1960s <- Spotify %>%
+  filter(., decade == 1960)%>%
+  group_by(track_artist) %>%
+  summarise(total_popularity = sum(track_popularity),
+            total_songs = n()) %>%
+  mutate(average_popularity = total_popularity / total_songs) %>%
+  filter(total_songs > 3) %>%
+  arrange(desc(average_popularity)) %>%
+  distinct(track_artist, .keep_all = TRUE) %>% 
+  head(5)
+
+print(most_popular_artists_1960s)
+```
+
+ - Najpopularniji pjevači 1970-ih godina:
+```{r, echo=FALSE}
+most_popular_artists_1970s <- Spotify %>%
+  filter(decade == 1970) %>%
+  group_by(track_artist) %>%
+  summarise(total_popularity = sum(track_popularity),
+            total_songs = n()) %>%
+  mutate(average_popularity = total_popularity / total_songs) %>%
+  filter(total_songs > 3) %>%
+  arrange(desc(average_popularity)) %>%
+  distinct(track_artist, .keep_all = TRUE) %>% 
+  head(5)
+
+print(most_popular_artists_1970s)
+
+```
+U razdoblju između 1960. - 1979. pretežito je najpopularniji žanr bio rock, a to
+odgovara i najpopularnijim izvođačima tog razdoblja.
+
+ - Najpopularniji pjevači 1980-ih godina:
+```{r, echo=FALSE}
+most_popular_artists_1980s <- Spotify %>%
+  filter(., decade == 1980)%>%
+  group_by(track_artist) %>%
+  summarise(total_popularity = sum(track_popularity),
+            total_songs = n()) %>%
+  mutate(average_popularity = total_popularity / total_songs) %>%
+  filter(total_songs > 3) %>%
+  top_n(5, average_popularity) %>%
+  arrange(desc(average_popularity))
+
+print(most_popular_artists_1980s)
+```
+Iako je 80-ih godina i dalje prevladavao rock, vidimo puno veću raznolikost među
+najpopularnijim pjevačima. Tako se na samom vrhu našao jedan pop band, dva rock 
+izvođača te jedan predstavnik latino žanra.
+
+ - Najpopularniji pjevači 1990-tih godina:
+```{r, echo=FALSE}
+most_popular_artists_1990s <- Spotify %>%
+  filter(., decade == 1990)%>%
+    group_by(track_artist) %>%
+  summarise(total_popularity = sum(track_popularity),
+            total_songs = n()) %>%
+  mutate(average_popularity = total_popularity / total_songs) %>%
+  filter(total_songs > 3) %>%
+  arrange(desc(average_popularity)) %>%
+  distinct(track_artist, .keep_all = TRUE) %>% 
+  head(5)
+
+print(most_popular_artists_1990s)
+```
+Iako je najveći uzorak pjesama r&b, među pet najpopularnijih izvođača ne nalazimo
+niti jednog izvođača iz tog žanra. Rock i dalje ostaje najomiljeniji žanr.
+
+ - Najpopularniji pjevači 2000-tih godina:
+```{r, echo=FALSE}
+most_popular_artists_2000s <- Spotify %>%
+  filter(., decade == 2000)%>%
+    group_by(track_artist) %>%
+  summarise(total_popularity = sum(track_popularity),
+            total_songs = n()) %>%
+  mutate(average_popularity = total_popularity / total_songs) %>%
+  filter(total_songs > 3) %>%
+  arrange(desc(average_popularity)) %>%
+  distinct(track_artist, .keep_all = TRUE) %>% 
+  head(5)
+
+print(most_popular_artists_2000s)
+```
+Slična priča je se nastavlja i u 2000-tim, iako je to razdoblje r&b, tog žanra
+nema na vidiku, te su u prosijeku pjesme rock izvođača najpopularnije.
+
+ - Najpopularniji pjevači 2010-ih godina:
+```{r, echo=FALSE}
+most_popular_artists_2010s <- Spotify %>%
+  filter(., decade == 2010)%>%
+    group_by(track_artist) %>%
+  summarise(total_popularity = sum(track_popularity),
+            total_songs = n()) %>%
+  mutate(average_popularity = total_popularity / total_songs) %>%
+  filter(total_songs > 3) %>%
+  arrange(desc(average_popularity)) %>%
+  distinct(track_artist, .keep_all = TRUE) %>% 
+  head(5)
+
+print(most_popular_artists_2010s)
+```
+2010-e godine donose promjene u trendu. Iako je najzastupljeniji žanr edm,
+njega ne nalazimo među 5 najpopularnijih izvođača. Uglavnom prevladavaju rap pjesme.
+
+ - Najpopularniji pjevači 2020-ih godina:
+```{r, echo=FALSE}
+most_popular_artists_2020s <- Spotify %>%
+  filter(., decade == 2020)%>%
+    group_by(track_artist) %>%
+  summarise(total_popularity = sum(track_popularity),
+            total_songs = n()) %>%
+  mutate(average_popularity = total_popularity / total_songs) %>%
+  filter(total_songs > 3) %>%
+  arrange(desc(average_popularity)) %>%
+  distinct(track_artist, .keep_all = TRUE) %>% 
+  head(5)
+
+print(most_popular_artists_2020s)
+```
+Iako uzorak za 2020-e godine nije prevelik, jasno je da današnje generacije 
+najviše uživaju slušajući pop.
+
+Budući da uzorak nije ravnomjerno raspoređen po svim desetljećima, moja pretpostavka 
+je da ukoliko bi izjednačili broj pjesama za svako razdoblje, ne bi vidjeli veliko
+odstupanje od gore navedenih rezultata.
+
+
+
+
+## Analiza parametara pjesama
+
+Zadani podatkovni skup sadrži brojne parametre koji nam daju dobru predodžbu 
+kakva je pojedina pjesma bez da je poslušamo. Stoga odlučujem provjeriti koliko
+su koji parametri međusobno povezani:
+
+```{r, echo=FALSE}
+library(ggcorrplot)
+result1 <- ggcorrplot(cor(Spotify[,c(12, 13, 15, 17, 18, 19, 20, 21, 22)]),
+           type="lower", lab=T)
+result1
+```
+Uočavamo da većina parametara međusobno ne korelira, ali energija pjesme podosta 
+ovisi o glasnoći i akustičnosti. Stoga sam odlučio napraviti jednostavni 
+linearni model kako bi vidjeli koliko je dobro ta veza opisana.
+
+```{r}
+linMod <- lm(energy~loudness+acousticness, data = Spotify)
+summary(linMod)
+```
+**R-kvadrat** parametar iznosi 0.5625 te **p-vrijednost** 2e-16. **R-kvadrat** nam
+predstavlja količinu varijabilnosti koja je objašnjena modelom. 
+S druge strane, **p-vrijednost**, tj. procjena vjerojatnosti da je kolinearnost
+uočena slučajno, a ovdje vidimo da je ona iznimno mala.
+Trenutno brojke obećavaju, ali i dalje ne možemo znati je li model dobar, stoga
+sam odlučilo preispitati ga:
+
+```{r, echo=FALSE}
+results <- round(predict(linMod, Spotify[1:10, c("loudness", "acousticness")]), 3)
+data1 <- data.frame(PraveVrijednosti = Spotify[1:10, "energy"],
+                    ProcijenjeneVrijednosti= results)
+names(data1)[1] <- "PraveVrijednosti"
+data1
+
+```
+U gornjoj tablici vidimo da razlika između procijenjenih i pravih vrijednosti ne
+varira previše. Želimo analizirati ponašanje reziduala, odnosno grešaka.
+
+```{r, echo=FALSE, message=FALSE}
+library(broom)
+library(gridExtra)
+predikcije <- augment(linMod)
+g1 <- ggplot(predikcije, aes(x=.std.resid)) + geom_density()
+
+g2 <- ggplot(predikcije, aes(sample=.std.resid)) + geom_qq()
+g3 <- ggplot(predikcije, aes(x=.fitted, y=.std.resid)) + geom_point() +
+  geom_hline(yintercept = 0, color="blue")
+grid.arrange(g1, g2, g3, ncol=2)
+```
+Iz gornjih grafova zaključujemo da se greške ponašaju prema normalnoj razdiobi,
+što je dobar znak za naš model.
+
+Odlučujem provjeriti i koliko iznosi prosječna greška procijenjenih i pravih
+vrijednosti:
+```{r}
+allresults <- predict(linMod, Spotify[, c("loudness", "acousticness")])
+average_error <- (allresults - Spotify$energy) %>%  abs() %>% sum() %>%
+  `/`(nrow(Spotify))
+average_error
+```
+Smatram da ovakva greška dovoljno mala da bi generalno mogli procijeniti pjesmu
+kao energičnu ili ne energičnu.
+
+## Analiza pjesama prema njezinim karakteristikama
+
+Mnogima je prilikom odabira playliste bitno koliko je ona energična. Prikazat ćemo prosječnu ocjenu energičnosti pjesama u svakom žanru.
+
+```{r, echo=FALSE}
+avg_energy_genre <- group_by(Spotify, playlist_genre) %>%
+  summarise(avg_energy = mean(energy))
+
+
+ggplot(avg_energy_genre, aes(x=playlist_genre, fill=avg_energy)) + 
+  stat_count(geom="bar", aes(y=after_stat(avg_energy_genre$avg_energy))) + 
+  labs(x="Žanr", y="Prosječna energičnost pjesama",
+       fill="Prosječna energičnost pjesama")
+```
+Očekivano, EDM (Electronic dance music) predvodi u ovoj kategoriji, dok se blues
+nalazi na posljednjem mjestu.
+
+
+```{r, echo=FALSE}
+set.seed(1234)
+spotifyManji <- sample_n(Spotify, 5000)
+srednjiTempo <- mean(spotifyManji$tempo)
+ggplot(spotifyManji, aes(x=tempo, y=danceability, color=playlist_genre))+
+geom_point() + stat_smooth(method = loess, formula = y~x, color="black", se=F)+
+facet_wrap(~playlist_genre) + labs(x="Tempo / BPM", y="Plesnost", color="Žanr")+
+geom_vline(xintercept=srednjiTempo, color="red")
+```
+Omjer tempa i prikladnosti pjesme za plesanje slijedi model kvadratne funkcije sa
+negativnim vodećim članom. Ovakav model se potvrđuje kroz sve žanrove. 
+Srednja vrijednost tempa svih žanrova iznosi 122 BPM (bitova po minuti) te se ta
+vrijednost otprilike poklapa s vrijednostima u kojima je prikladnost za ples
+najveća.
+
+
+Speechiness detektira prisutnost govornih riječi u glazbenom zapisu. Što je snimka sličnija govoru (npr. razgovor, podcast), to će njegova vrijednost biti bliža 1.0. Vrijednosti iznad 0.66 opisuju zapise koji su vjerojatno potpuno sastavljeni od govornih riječi. Vrijednosti između 0.33 i 0.66 opisuju zapise koji mogu sadržavati i glazbu i govor, ili u određenim dijelovima ili slojevima, uključujući slučajeve poput rap glazbe. Vrijednosti ispod 0.33 najvjerojatnije predstavljaju glazbu i druge zapise koji nisu slični govoru.
+
+Htio sam provjeriti razinu tog atributa za sve žanrove primjenjujući histogram:
+
+```{r, echo=FALSE}
+ggplot(Spotify, aes(x = speechiness)) +
+  geom_histogram(binwidth = 0.025, fill = "blue", color = "black", alpha = 0.6) +
+  labs(title = "Distribucija razine Speechiness-a",
+       x = "Speechiness",
+       y = "Frekvencija") +
+  theme_minimal() +
+  facet_wrap(~playlist_genre, scales = "free_y", ncol = 2)+
+  scale_x_continuous(breaks = seq(0, 1, by = 0.33))
+  
+```
+Rezultati su očekivani. Većina pjesama svih žanrova ima razinu ispod 0.33, tj. 
+radi se o zapisima koji predstavljaju glazbu. Iznimka je jedino rap, koji sadrži puno riječi te ne čudi činjenica da ima povišenu razinu tog parametra.
+
+
+Uz pomoć key podataka možemo zaključiti koji je glavni tonalitet pojedine pjesme.
+Stoga me je zanimalo koji su tonaliteti najzastupljeniji u ovom uzorku:
+
+```{r, echo=FALSE, message=FALSE, , warning=FALSE}
+Spotify <- Spotify %>% filter(!is.na(key))
+key_counts <- table(Spotify$key)  
+key_count <- as.vector(key_counts)
+names(key_count) <- c("nema", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+key_count
+
+color_palette <- brewer.pal(length(key_count), "YlOrRd")
+
+pie(key_count, main = "Zastupljenost ključeva",
+    labels = paste(names(key_count), ": ", round(key_count/sum(key_count) * 100,
+                                                 1), "%"), cex = 0.8,
+    col = color_palette)
+```
+[Analizirajući internetom zastupljenost tonaliteta, pronašao sam podatak da
+trećina svih pjesama na svijetu sadrži ključeve: **C#**, **D#**, **G#** i **A#**.](https://gizmodo.com/a-chart-of-the-most-commonly-used-keys-shows-our-actual-1703086174) 
+Zanimljivost je da u našem skupu taj zbroj iznosi približno isto.
+
+```{r}
+paste(round(sum(key_count["C#"], key_count["D#"], key_count["G#"], key_count["A#"]) /
+  sum(key_count[1:13]) * 100, 2), "%")
+```
+
+Pogledajmo koliko se po desetljećima stvaralo vesele, a koliko tužne glazbe:
+
+```{r, echo=FALSE}
+podaci <- Spotify %>%
+  group_by(track_album_release_date, mode) %>%
+  summarise(broj_pjesama = n(), .groups = "drop")
+
+ggplot(podaci, aes(x = year(as.Date(track_album_release_date, format = "%Y-%m-%d")), y = broj_pjesama, fill = factor(mode))) +
+  geom_area(alpha = 0.6, position = "stack") +
+  scale_fill_manual(values = c("blue", "red"), 
+                    labels = c("Tužan", "Veseo"), 
+                    name = "Ugođaj") +
+  labs(x = "Godina", y = "Broj pjesama", 
+       title = "Mod pjesama po godini") +
+  theme_minimal()
+```
+Možemo reći da je generalno trend da se više stvara **tužne** glazbe.
+No, koliko je to zapravo istinito.
+Na satovima glazbenog su nas jednostavno učili kako odabir tonaliteta određuje je
+li glazbeno djelo veselo ili tužno. Dur smo poistovjećivali sa sretnom, a mol sa
+tužnom glazbom. 
+
+```{r, echo=FALSE}
+set.seed(12345)
+
+spotifyManji <- sample_n(Spotify, 1000)
+ggplot(spotifyManji, aes(x=mode, y=valence)) + geom_jitter(width=0.1) + labs(x="Tonalitet", y="Razina veselja")
+```
+
+Vidimo da razine veselja i u mol ljestvici i u dur ljestvici postižu i visoke i niske razine veselja. 
+Također, naziremo najveću gustoću rezultata oko srednje razine veselja.
+Vizualno zaključujemo slične rezultate za obje ljestvice. Jesu li nas varali u školi? Provjerimo tezu izradom linearnog regresijskog modela.
+
+```{r, echo=FALSE}
+linMod <- lm(valence~mode, Spotify)
+summary(linMod)
+```
+
+Vidimo da je p-vrijednost za varijablu tonaliteta jako velika (0.855) što nas
+vodi do zaključka da je ovisnost između tonaliteta i razine veselja jako mala.
+
+
+Za očekivati je da snimke koncerata dulje traju jer izvođač ima interakciju s 
+publikom te brojni bendovi ubacuju dugačke solo dionice gitarista/bubnjara.
+
+```{r, echo=FALSE}
+podaci <- sample_n(Spotify, 5000)
+ggplot(podaci, aes(x = duration_ms/1000, y = liveness, color=playlist_genre)) + geom_point() + facet_wrap(~playlist_genre) + labs(x="Vrijeme trajanja/sek", y="Vjerojatnost da je snimka sa koncerta", color="Žanr") 
+```
+
+Očekivali smo da pjesme koje su najduže da će imati najveću razinu liveness-a, međutim taj trend se jedino nazire za žanrove rock i edm-a, dok kod ostalih prevladava da pjesme srednje duljine trajanja karakterizira najveća razina tog parametra.
+
+## Fun facts:
+  
+  - Koliko ima ukupno dueta
+
+```{r, echo=FALSE}
+count_dueti <- sum(grepl("with|feat\\.", Spotify$track_name, ignore.case = TRUE))
+print(paste("Ukupni broj dueta:", count_dueti))
+
+```
+
+ - Najdulje prosječno trajanje pjesme
+```{r, echo=FALSE}
+average_duration <- aggregate(Spotify$duration_ms, by=list(Category=Spotify$track_artist), FUN=mean)
+longest_average_duration_artist <- c(average_duration$Category[which.max(average_duration$x)])
+
+longest_average_duration_artist
+```
+Iz podataka se vidi kako izvođač Newcleus ima prosječno najdulje pjesme te 
+prosjek trajanja njegovih pjesama je 8 minuta i 40 sekundi.
+
+
+ - Najplesniji album
+```{r, echo=FALSE}
+average_danceability <- Spotify %>%
+  group_by(track_album_name) %>%
+  summarise(average_danceability = mean(danceability, na.rm = TRUE), num_songs = n())
+average_danceability <- average_danceability[average_danceability$num_songs >= 5,]
+most_danceable_album <- average_danceability[which.max(average_danceability$average_danceability),]
+
+most_danceable_album$track_album_name
+
+```
+Ako ste raspoloženi za ples, preporučujem album 
+"Quality Control: Control The Streets Volume 2"
+
+
+ - "Najužurbaniji" album (najbrži tempo)
+
+```{r, echo=FALSE}
+average_tempo <- Spotify %>%
+  group_by(track_album_name) %>%
+  summarise(average_tempo = mean(tempo, na.rm = TRUE), num_songs = n())
+
+
+average_tempo <- average_tempo[average_tempo$num_songs >= 5,]
+
+
+most_tempo_fast_album <- average_tempo[which.max(average_tempo$average_tempo),]
+
+most_tempo_fast_album$track_album_name
+```
+Ako negdje žurite, pustite si album  "Hola (Remix)". Sigurno će vas ubrzati.
+Pazite na ograničenja u prometu :)
+
+
+ - Kralj publike
+```{r, echo=FALSE}
+broj_pjesama <- table(Spotify$track_artist)
+
+prosjecni_liveness <- aggregate(Spotify$liveness, by=list(track_artist=Spotify$track_artist), FUN=mean)
+
+prosjecni_liveness$broj_pjesama <- broj_pjesama[match(prosjecni_liveness$track_artist, names(broj_pjesama))]
+
+prosjecni_liveness <- prosjecni_liveness[prosjecni_liveness$broj_pjesama >= 5,]
+
+najveci_liveness <- prosjecni_liveness[which.max(prosjecni_liveness$x), "track_artist"]
+
+print(najveci_liveness)
+
+```
+Ne volite pjevati sami? Pridružite se bendu Soda Stereo i njihovoj publici u jednoj od brojnih 
+snimki koncerata.
+
